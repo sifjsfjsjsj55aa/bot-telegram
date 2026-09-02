@@ -327,7 +327,9 @@ async def _pasarguard_create_test(panel: dict | None, telegram_user_id: int) -> 
             config.PASARGUARD_USERNAME = panel.get("username") or ""
             config.PASARGUARD_PASSWORD = panel.get("password") or ""
             config.PASARGUARD_API_KEY = panel.get("api_token") or ""
-            return await pg.create_test_account(telegram_user_id)
+            if hasattr(pg, "clear_token_cache"):
+                pg.clear_token_cache()
+            return await pg.create_test_account(telegram_user_id, kind="multi")
         finally:
             for k, v in old.items():
                 setattr(config, k, v)

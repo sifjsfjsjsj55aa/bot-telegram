@@ -1166,13 +1166,33 @@ async def free_test_handler(message: Message, state: FSMContext):
                 await bot.send_message(admin_id, admin_text, parse_mode="HTML")
             except Exception as e:
                 logging.warning(f"notify admin: {e}")
-    except Exception:
+    except Exception as e:
         logging.exception("Auto free-test panel error")
         await db.set_free_test_status(user_id, "rejected")
+        err_txt = str(e)[:400] or type(e).__name__
+        user_msg = (
+            "❌ ساخت تست با خطا مواجه شد.\n\n"
+            f"<code>{err_txt}</code>\n\n"
+            "اگر ادمین هستید: پنل پیش‌فرض، آدرس، یوزر/پسورد یا Inbound ID را در «ثبت پنل» چک کنید."
+        )
         try:
-            await wait_msg.edit_text("❌ ساخت تست با خطا مواجه شد. بعداً دوباره تلاش کنید.")
+            await wait_msg.edit_text(user_msg, parse_mode="HTML")
         except Exception:
-            await message.answer("❌ ساخت تست با خطا مواجه شد.", reply_markup=main_menu_kb(user_id))
+            await message.answer(user_msg, parse_mode="HTML", reply_markup=main_menu_kb(user_id))
+        for admin_id in config.ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    (
+                        "❌ خطای ساخت تست رایگان\n"
+                        f"👤 {message.from_user.full_name}\n"
+                        f"🆔 <code>{user_id}</code>\n\n"
+                        f"<code>{err_txt}</code>"
+                    ),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
 
 
 @dp.callback_query(F.data.startswith("ftapprove:"))
@@ -3326,6 +3346,23 @@ async def admin_panel_test(callback: CallbackQuery):
     import panel_manager as pm
     msg = await pm.test_panel_connection(pid)
     await callback.message.answer(msg)
+
+
+
+@dp.message(Command("reset_freetest"))
+async def admin_reset_freetest(message: Message):
+    """ادمین: /reset_freetest 123456789 — پاک کردن سابقه تست یک کاربر"""
+    if message.from_user.id not in config.ADMIN_IDS:
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("فرمت: /reset_freetest USER_ID")
+        return
+    uid = int(parts[1])
+    async with __import__("aiosqlite").connect(config.DB_PATH) as con:
+        await con.execute("DELETE FROM free_tests WHERE user_id = ?", (uid,))
+        await con.commit()
+    await message.answer(f"✅ سابقه تست کاربر <code>{uid}</code> پاک شد. می‌تواند دوباره تست بگیرد.", parse_mode="HTML")
 
 
 # ---------- Startup ----------

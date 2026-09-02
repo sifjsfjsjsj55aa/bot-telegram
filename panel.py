@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 _token_cache: dict[str, Any] = {"token": None, "expires_at": 0.0}
 
 
+def clear_token_cache() -> None:
+    _token_cache["token"] = None
+    _token_cache["expires_at"] = 0.0
+
+
 def _base() -> str:
     return (config.PASARGUARD_BASE_URL or "").rstrip("/")
 
@@ -208,14 +213,14 @@ def _format_duration(hours: int) -> str:
     return f"{hours} ساعت"
 
 
-def build_test_message(username: str, subscription_url: str) -> str:
+def build_test_message(username: str, subscription_url: str, location: str | None = None) -> str:
     """متن تحویل را از قالب Variables می‌سازد."""
     hours = config.PASARGUARD_TEST_EXPIRE_HOURS
     gb = config.PASARGUARD_TEST_DATA_LIMIT_GB
     tpl = config.PASARGUARD_TEST_MESSAGE or ""
     return tpl.format(
         username=username,
-        location=config.PASARGUARD_TEST_LOCATION_NAME,
+        location=location or config.PASARGUARD_TEST_LOCATION_NAME,
         duration=_format_duration(hours),
         volume=_format_volume(gb),
         subscription_url=subscription_url,
@@ -241,20 +246,33 @@ def make_qr_png(data: str) -> bytes:
     return buf.getvalue()
 
 
-async def create_test_account(telegram_user_id: int) -> dict[str, str]:
+async def create_test_account(telegram_user_id: int, kind: str = "multi") -> dict[str, str]:
     """
     یک اکانت تست روی پنل می‌سازد.
-    خروجی: {"username", "subscription_url", "message"}
+    kind: "gaming" یا "multi"
+    خروجی: username, subscription_url, message, expire_at, kind
     """
     if not config.is_panel_auto_enabled():
         raise RuntimeError("Panel auto mode is not configured")
 
+    kind = (kind or "multi").strip().lower()
+    if kind not in ("gaming", "multi"):
+        kind = "multi"
+
     base = _base()
     prefix = config.PASARGUARD_TEST_USERNAME_PREFIX or "test_"
-    # نام یکتا: prefix + بخشی از آیدی تلگرام + رندوم کوتاه
-    username = f"{prefix}{telegram_user_id}_{uuid4().hex[:6]}"
-    # محدودیت طول یوزرنیم پنل معمولاً تا ۱۲۸ است
+    tag = "g" if kind == "gaming" else "m"
+    username = f"{prefix}{tag}{telegram_user_id}_{uuid4().hex[:6]}"
     username = username[:64]
+
+    if kind == "gaming":
+        group_specs = list(getattr(config, "PASARGUARD_TEST_GROUPS_GAMING", None) or config.PASARGUARD_TEST_GROUPS)
+        location = getattr(config, "PASARGUARD_TEST_LOCATION_GAMING", "گیمینگ")
+    else:
+        group_specs = list(getattr(config, "PASARGUARD_TEST_GROUPS_MULTI", None) or config.PASARGUARD_TEST_GROUPS)
+        location = getattr(config, "PASARGUARD_TEST_LOCATION_MULTI", config.PASARGUARD_TEST_LOCATION_NAME)
+
+    expire_ts = int(time.time()) + int(config.PASARGUARD_TEST_EXPIRE_HOURS) * 3600
 
     async with httpx.AsyncClient(timeout=30.0, verify=True, follow_redirects=True) as client:
         token = await _get_token(client)
@@ -262,12 +280,11 @@ async def create_test_account(telegram_user_id: int) -> dict[str, str]:
 
         user_data: dict[str, Any] | None = None
 
-        # مسیر ۱: ساخت از قالب
         if config.PASARGUARD_TEST_TEMPLATE_ID is not None:
             body = {
                 "user_template_id": config.PASARGUARD_TEST_TEMPLATE_ID,
                 "username": username,
-                "note": f"telegram free test uid={telegram_user_id}",
+                "note": f"telegram free test uid={telegram_user_id} kind={kind}",
             }
             r = await client.post(f"{base}/api/user/from_template", json=body, headers=headers)
             if r.status_code >= 400:
@@ -275,25 +292,22 @@ async def create_test_account(telegram_user_id: int) -> dict[str, str]:
                 raise RuntimeError(f"Create from template failed: {r.status_code} {r.text[:300]}")
             user_data = r.json()
         else:
-            # مسیر ۲: ساخت مستقیم
-            data_limit_bytes = int(config.PASARGUARD_TEST_DATA_LIMIT_GB * (1024**3))
-            expire_ts = int(time.time()) + config.PASARGUARD_TEST_EXPIRE_HOURS * 3600
+            data_limit_bytes = int(float(config.PASARGUARD_TEST_DATA_LIMIT_GB) * (1024 ** 3))
             body = {
                 "username": username,
                 "status": "active",
                 "data_limit": data_limit_bytes,
                 "expire": expire_ts,
-                "note": f"telegram free test uid={telegram_user_id}",
+                "note": f"telegram free test uid={telegram_user_id} kind={kind}",
             }
-            group_ids = await _resolve_group_ids(client, token)
+            group_ids = await _resolve_group_ids(client, token, group_specs=group_specs)
             if group_ids:
                 body["group_ids"] = group_ids
             else:
                 raise RuntimeError(
-                    "No test groups configured. Set PASARGUARD_TEST_GROUPS to your panel group names "
-                    "(e.g. gaming,multi) or numeric IDs."
+                    f"No test groups for kind={kind}. Set PASARGUARD_TEST_GROUPS_GAMING / "
+                    "PASARGUARD_TEST_GROUPS_MULTI or PASARGUARD_TEST_GROUPS."
                 )
-
             r = await client.post(f"{base}/api/user", json=body, headers=headers)
             if r.status_code >= 400:
                 logger.error("create user failed: %s %s", r.status_code, r.text[:400])
@@ -302,7 +316,6 @@ async def create_test_account(telegram_user_id: int) -> dict[str, str]:
 
         final_username = (user_data or {}).get("username") or username
 
-        # بعد از ساخت، یک‌بار جزئیات کاربر را می‌گیریم تا subscription_url قطعی باشد
         try:
             r2 = await client.get(f"{base}/api/user/{final_username}", headers=headers)
             if r2.status_code < 400:
@@ -314,7 +327,6 @@ async def create_test_account(telegram_user_id: int) -> dict[str, str]:
 
         sub = _extract_subscription_url(user_data or {}, base)
         if not sub:
-            # مسیرهای جایگزین دریافت ساب
             for path in (
                 f"{base}/api/user/{final_username}/subscription",
                 f"{base}/api/user/{final_username}/sub",
@@ -333,13 +345,11 @@ async def create_test_account(telegram_user_id: int) -> dict[str, str]:
                             break
                 except Exception:
                     pass
-
         if not sub:
             logger.error("No subscription_url in user payload keys=%s", list((user_data or {}).keys()))
             sub = ""
 
-    message = build_test_message(final_username, sub)
-    # اگر قالب Variables جای‌نگهدار نداشت، خودمان نام و لینک را اضافه می‌کنیم
+    message = build_test_message(final_username, sub, location=location)
     if final_username and final_username not in message:
         message = message.rstrip() + f"\n\n👤 نام کاربری تست : {final_username}"
     if sub:
@@ -352,6 +362,8 @@ async def create_test_account(telegram_user_id: int) -> dict[str, str]:
         "username": final_username,
         "subscription_url": sub or "",
         "message": message,
+        "expire_at": expire_ts,
+        "kind": kind,
     }
 
 
@@ -560,3 +572,209 @@ async def create_service_account(
         "subscription_url": sub or "",
         "message": message,
     }
+
+
+async def get_panel_user(username: str) -> dict[str, Any] | None:
+    """جزئیات کاربر پنل؛ اگر نبود None."""
+    if not config.is_panel_auto_enabled() or not username:
+        return None
+    base = _base()
+    async with httpx.AsyncClient(timeout=30.0, verify=True, follow_redirects=True) as client:
+        token = await _get_token(client)
+        headers = _auth_headers(token)
+        r = await client.get(f"{base}/api/user/{username}", headers=headers)
+        if r.status_code == 404:
+            return None
+        if r.status_code >= 400:
+            logger.warning("get user %s: %s %s", username, r.status_code, r.text[:200])
+            return None
+        data = r.json()
+        return data if isinstance(data, dict) else None
+
+
+async def delete_panel_user(username: str) -> bool:
+    """حذف کاربر از پنل."""
+    if not config.is_panel_auto_enabled() or not username:
+        return False
+    base = _base()
+    async with httpx.AsyncClient(timeout=30.0, verify=True, follow_redirects=True) as client:
+        token = await _get_token(client)
+        headers = _auth_headers(token)
+        paths = [
+            ("DELETE", f"{base}/api/user/{username}"),
+            ("DELETE", f"{base}/api/users/{username}"),
+            ("POST", f"{base}/api/user/{username}/delete"),
+            ("POST", f"{base}/api/user/delete"),
+        ]
+        for method, url in paths:
+            try:
+                if method == "DELETE":
+                    r = await client.request(method, url, headers=headers)
+                else:
+                    r = await client.post(url, headers=headers, json={"username": username})
+                if r.status_code in (200, 204, 404):
+                    logger.info("Deleted panel user %s via %s %s", username, method, url)
+                    return True
+                logger.warning("delete try %s %s -> %s %s", method, url, r.status_code, r.text[:150])
+            except Exception as e:
+                logger.warning("delete try error %s: %s", url, e)
+        return False
+
+
+def _parse_expire_ts(exp) -> int | None:
+    """expire پنل را به unix timestamp تبدیل می‌کند."""
+    if exp is None or exp is False:
+        return None
+    if isinstance(exp, (int, float)):
+        v = int(exp)
+        if v <= 0:
+            return None
+        # میلی‌ثانیه
+        if v > 10_000_000_000:
+            v //= 1000
+        return v
+    if isinstance(exp, str):
+        s = exp.strip()
+        if not s:
+            return None
+        try:
+            v = int(float(s))
+            if v > 10_000_000_000:
+                v //= 1000
+            return v if v > 0 else None
+        except ValueError:
+            pass
+        # ISO datetime
+        try:
+            from datetime import datetime
+
+            s2 = s.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s2)
+            return int(dt.timestamp())
+        except Exception:
+            return None
+    return None
+
+
+def is_panel_user_exhausted(user_data: dict[str, Any] | None, local_expire_at: int | None = None) -> tuple[bool, str]:
+    """(تمام_شده؟, دلیل: زمان|حجم)."""
+    now = int(time.time())
+    try:
+        if local_expire_at is not None and int(local_expire_at) > 0 and now >= int(local_expire_at):
+            return True, "زمان"
+    except (TypeError, ValueError):
+        pass
+
+    if not user_data:
+        # فقط زمان محلی داشتیم و نرسیده
+        return False, ""
+
+    for key in ("expire", "expire_at", "expired_at", "expiry", "expire_date"):
+        ts = _parse_expire_ts(user_data.get(key))
+        if ts and now >= ts:
+            return True, "زمان"
+
+    status = str(user_data.get("status") or "").lower()
+    if status in ("expired", "disabled", "on_hold"):
+        return True, "زمان"
+    if status in ("limited", "limit"):
+        return True, "حجم"
+
+    data_limit = user_data.get("data_limit")
+    used = user_data.get("used_traffic")
+    if used is None:
+        used = user_data.get("lifetime_used_traffic")
+    try:
+        dl = int(data_limit) if data_limit is not None else 0
+        us = int(used) if used is not None else -1
+        if dl > 0 and us >= dl:
+            return True, "حجم"
+    except (TypeError, ValueError):
+        pass
+
+    # درصد مصرف
+    try:
+        pct = user_data.get("data_limit_used_percent") or user_data.get("used_percent")
+        if pct is not None and float(pct) >= 100:
+            return True, "حجم"
+    except (TypeError, ValueError):
+        pass
+
+    return False, ""
+
+
+async def find_test_users_for_telegram(telegram_user_id: int) -> list[str]:
+    """یوزرنیم‌های تست روی پنل که به این آیدی تلگرام مربوط‌اند."""
+    if not config.is_panel_auto_enabled():
+        return []
+    uid = str(telegram_user_id)
+    prefix = (config.PASARGUARD_TEST_USERNAME_PREFIX or "test_").lower()
+    base = _base()
+    found: list[str] = []
+    async with httpx.AsyncClient(timeout=45.0, verify=True, follow_redirects=True) as client:
+        token = await _get_token(client)
+        headers = _auth_headers(token)
+        users: list = []
+        for path in (f"{base}/api/users", f"{base}/api/user"):
+            try:
+                r = await client.get(path, headers=headers)
+                if r.status_code >= 400:
+                    continue
+                data = r.json()
+                if isinstance(data, list):
+                    users = data
+                elif isinstance(data, dict):
+                    users = data.get("users") or data.get("items") or data.get("data") or []
+                    if isinstance(users, dict):
+                        users = list(users.values()) if users else []
+                break
+            except Exception as e:
+                logger.warning("list users via %s: %s", path, e)
+        for u in users or []:
+            if not isinstance(u, dict):
+                continue
+            name = str(u.get("username") or "")
+            note = str(u.get("note") or "")
+            nl = name.lower()
+            if uid in name or f"uid={uid}" in note or f"telegram={uid}" in note or f"telegram free test uid={uid}" in note:
+                if prefix in nl or nl.startswith("test") or "uid=" in note:
+                    found.append(name)
+            elif uid in nl and (nl.startswith(prefix) or "_g" + uid in nl or "_m" + uid in nl):
+                found.append(name)
+    # unique preserve order
+    return list(dict.fromkeys([x for x in found if x]))
+
+
+async def cleanup_duplicate_tests_for_user(telegram_user_id: int) -> dict:
+    """
+    تست‌های قبلی این کاربر روی پنل را بررسی می‌کند.
+    - منقضی/تمام‌شده را پاک می‌کند
+    - اگر هنوز تست فعال دارد، لیست‌شان را برمی‌گرداند تا تست جدید ندهیم
+    """
+    names = await find_test_users_for_telegram(telegram_user_id)
+    active: list[str] = []
+    deleted: list[str] = []
+    for name in names:
+        try:
+            info = await get_panel_user(name)
+        except Exception:
+            info = None
+        done, reason = is_panel_user_exhausted(info, None)
+        if info is None:
+            # نیست
+            continue
+        if done:
+            if await delete_panel_user(name):
+                deleted.append(name)
+        else:
+            active.append(name)
+    # اگر بیش از یکی فعال است، همه به‌جز اولین را پاک کن
+    extras_deleted: list[str] = []
+    if len(active) > 1:
+        keep = active[0]
+        for name in active[1:]:
+            if await delete_panel_user(name):
+                extras_deleted.append(name)
+        active = [keep]
+    return {"active": active, "deleted_expired": deleted, "deleted_extras": extras_deleted}
+
