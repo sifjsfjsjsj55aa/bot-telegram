@@ -67,14 +67,29 @@ DEFAULT_MULTI_PLANS = [
     ("دو کاربره نامحدود دو‌ماهه", 450000),
 ]
 
-# ---------- پنل پاسارگارد (تست خودکار) ----------
-# اگر PASARGUARD_BASE_URL خالی باشه، تست رایگان دستی (توسط ادمین) می‌مونه
-PASARGUARD_BASE_URL = os.getenv("PASARGUARD_BASE_URL", "").rstrip("/")
-PASARGUARD_USERNAME = os.getenv("PASARGUARD_USERNAME", "")
-PASARGUARD_PASSWORD = os.getenv("PASARGUARD_PASSWORD", "")
-PASARGUARD_API_KEY = os.getenv("PASARGUARD_API_KEY", "")  # اختیاری؛ اگر باشه به‌جای یوزر/پسورد
 
-# قالب تست (اختیاری). اگر ست بشه، کاربر از روی قالب ساخته می‌شه
+# ---------- پنل VPN (Variables) ----------
+# نوع: pasarguard | marzban | marzneshin | sanaei
+PANEL_TYPE = (os.getenv("PANEL_TYPE") or os.getenv("PASARGUARD_PANEL_TYPE") or "pasarguard").strip().lower()
+if PANEL_TYPE in ("3x-ui", "3xui", "x-ui", "xui", "sanaei"):
+    PANEL_TYPE = "sanaei"
+if PANEL_TYPE in ("marzneshin", "marznesh"):
+    PANEL_TYPE = "marzneshin"
+
+PANEL_BASE_URL = (os.getenv("PANEL_BASE_URL") or os.getenv("PASARGUARD_BASE_URL") or "").rstrip("/")
+PANEL_USERNAME = os.getenv("PANEL_USERNAME") or os.getenv("PASARGUARD_USERNAME") or ""
+PANEL_PASSWORD = os.getenv("PANEL_PASSWORD") or os.getenv("PASARGUARD_PASSWORD") or ""
+PANEL_API_KEY = os.getenv("PANEL_API_KEY") or os.getenv("PASARGUARD_API_KEY") or ""
+
+# سازگاری با کد قدیمی
+PASARGUARD_BASE_URL = PANEL_BASE_URL
+PASARGUARD_USERNAME = PANEL_USERNAME
+PASARGUARD_PASSWORD = PANEL_PASSWORD
+PASARGUARD_API_KEY = PANEL_API_KEY
+
+# فقط سنایی: Inbound ID
+PANEL_INBOUND_ID = (os.getenv("PANEL_INBOUND_ID") or os.getenv("SANAEI_INBOUND_ID") or "").strip()
+
 PASARGUARD_TEST_TEMPLATE_ID = os.getenv("PASARGUARD_TEST_TEMPLATE_ID", "").strip() or None
 if PASARGUARD_TEST_TEMPLATE_ID is not None:
     try:
@@ -82,63 +97,52 @@ if PASARGUARD_TEST_TEMPLATE_ID is not None:
     except ValueError:
         PASARGUARD_TEST_TEMPLATE_ID = None
 
-# اگر قالب نباشد، از این مقادیر برای ساخت کاربر استفاده می‌شود
-PASARGUARD_TEST_DATA_LIMIT_GB = float(os.getenv("PASARGUARD_TEST_DATA_LIMIT_GB", "0.3"))  # گیگ
-PASARGUARD_TEST_EXPIRE_HOURS = int(os.getenv("PASARGUARD_TEST_EXPIRE_HOURS", "48"))
+PASARGUARD_TEST_DATA_LIMIT_GB = float(
+    os.getenv("PANEL_TEST_DATA_LIMIT_GB") or os.getenv("PASARGUARD_TEST_DATA_LIMIT_GB") or "0.3"
+)
+PASARGUARD_TEST_EXPIRE_HOURS = int(
+    os.getenv("PANEL_TEST_EXPIRE_HOURS") or os.getenv("PASARGUARD_TEST_EXPIRE_HOURS") or "48"
+)
 
-# گروه‌های تست — می‌تونی اسم گروه یا آیدی عددی بنویسی (با کاما جدا کن)
-# مثال با اسم: PASARGUARD_TEST_GROUPS=gaming,multi
-# مثال با آیدی: PASARGUARD_TEST_GROUPS=1,3
-# (نام متغیر قدیمی PASARGUARD_TEST_GROUP_IDS هم هنوز کار می‌کنه)
 _raw_groups = os.getenv("PASARGUARD_TEST_GROUPS") or os.getenv("PASARGUARD_TEST_GROUP_IDS") or ""
 PASARGUARD_TEST_GROUPS = [x.strip() for x in _raw_groups.split(",") if x.strip()]
-
-# گروه‌های جدا برای تست گیمینگ / مولتی (اگر خالی باشد از PASARGUARD_TEST_GROUPS استفاده می‌شود)
 _raw_tg = os.getenv("PASARGUARD_TEST_GROUPS_GAMING", "").strip()
 PASARGUARD_TEST_GROUPS_GAMING = [x.strip() for x in _raw_tg.split(",") if x.strip()] or list(PASARGUARD_TEST_GROUPS)
 _raw_tm = os.getenv("PASARGUARD_TEST_GROUPS_MULTI", "").strip()
 PASARGUARD_TEST_GROUPS_MULTI = [x.strip() for x in _raw_tm.split(",") if x.strip()] or list(PASARGUARD_TEST_GROUPS)
+FREE_TEST_CLEANUP_INTERVAL_SEC = int(os.getenv("FREE_TEST_CLEANUP_INTERVAL_SEC", "300"))
 
 PASARGUARD_TEST_LOCATION_GAMING = os.getenv("PASARGUARD_TEST_LOCATION_GAMING", "گیمینگ")
 PASARGUARD_TEST_LOCATION_MULTI = os.getenv(
     "PASARGUARD_TEST_LOCATION_MULTI",
     os.getenv("PASARGUARD_TEST_LOCATION_NAME", "مولتی لوکیشن"),
 )
-# فاصله بررسی انقضای تست‌ها (ثانیه) — پیش‌فرض ۵ دقیقه
-FREE_TEST_CLEANUP_INTERVAL_SEC = int(os.getenv("FREE_TEST_CLEANUP_INTERVAL_SEC", "300"))
-
-# پیشوند نام کاربری تست (مثلاً test_)
 PASARGUARD_TEST_USERNAME_PREFIX = os.getenv("PASARGUARD_TEST_USERNAME_PREFIX", "test_")
-
-# متن‌های نمایشی در پیام تحویل (قابل تغییر از Variables)
 PASARGUARD_TEST_LOCATION_NAME = os.getenv("PASARGUARD_TEST_LOCATION_NAME", "مولتی لوکیشن")
 PASARGUARD_TEST_SERVICE_NAME = os.getenv("PASARGUARD_TEST_SERVICE_NAME", "تست")
 
-# قالب پیام تحویل — از این placeholderها استفاده کنید:
-# {username} {location} {duration} {volume} {subscription_url} {service_name}
-PASARGUARD_TEST_MESSAGE = os.getenv(
-    "PASARGUARD_TEST_MESSAGE",
-    (
-        "✅ تست با موفقیت آماده شد\n\n"
-        "👤 نام کاربری تست : {username}\n"
-        "🌐 لوکیشن : {location}\n"
-        "⌛ مدت زمان : {duration}\n"
-        "📊 حجم تست : {volume}\n\n"
-        "لینک اتصال 📎 :\n"
-        "{subscription_url}\n\n"
-        "🧑‍🦯 شما میتوانید شیوه اتصال را با فشردن دکمه زیر و انتخاب سیستم عامل خود را دریافت کنید"
-    ),
+_default_test_msg = (
+    "✅ تست با موفقیت آماده شد\n\n"
+    "👤 نام کاربری تست : {username}\n"
+    "🌐 لوکیشن : {location}\n"
+    "⌛ مدت زمان : {duration}\n"
+    "📊 حجم تست : {volume}\n\n"
+    "لینک اتصال 📎 :\n"
+    "{subscription_url}\n\n"
+    "🧑‍🦯 شما میتوانید شیوه اتصال را با فشردن دکمه زیر و انتخاب سیستم عامل خود را دریافت کنید"
 )
+PASARGUARD_TEST_MESSAGE = os.getenv("PANEL_TEST_MESSAGE") or os.getenv("PASARGUARD_TEST_MESSAGE") or _default_test_msg
 
 
 def is_panel_auto_enabled() -> bool:
-    """آیا ساخت خودکار روی پنل فعال است؟ (تست و خرید سرویس)"""
-    if not PASARGUARD_BASE_URL:
+    """آیا ساخت خودکار روی پنل فعال است؟"""
+    if not PANEL_BASE_URL:
         return False
-    if PASARGUARD_API_KEY:
+    if PANEL_TYPE == "sanaei":
+        return bool(PANEL_USERNAME and PANEL_PASSWORD and PANEL_INBOUND_ID)
+    if PANEL_API_KEY:
         return True
-    return bool(PASARGUARD_USERNAME and PASARGUARD_PASSWORD)
-
+    return bool(PANEL_USERNAME and PANEL_PASSWORD)
 
 # ---------- سرویس خریداری‌شده (بعد از تأیید رسید) ----------
 # گروه‌های سرویس پولی — اگر خالی باشد از PASARGUARD_TEST_GROUPS استفاده می‌شود

@@ -1564,7 +1564,6 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📋 تعرفه‌ها", callback_data="admintariff:menu")],
-            [InlineKeyboardButton(text="🖥 ثبت پنل", callback_data="adminpanel:menu")],
             [InlineKeyboardButton(text="📊 گزارش خریدها", callback_data="adminreports")],
             [
                 InlineKeyboardButton(text="⬇️ دانلود بکاپ", callback_data="adminbackup:dl"),
